@@ -25,14 +25,19 @@ class Embedding(nn.Module):
     """
     def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob, use_char_emb):
         super(Embedding, self).__init__()
-        self.use_char_emb =use_char_emb
+        self.use_char_emb = use_char_emb
         self.drop_prob = drop_prob
         self.word_emb = nn.Embedding.from_pretrained(word_vectors)
         if self.use_char_emb:
             self.char_emb = nn.Embedding.from_pretrained(char_vectors)
-            self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
+#############################################
+            self.conv2d = nn.Conv2d(64, 200, kernel_size=(1, 5))
+            nn.init.xavier_uniform_(self.conv2d.weight)
+############################################
+            self.proj = nn.Linear(word_vectors.size(1) + 200, hidden_size, bias=False)
+            #print(word_vectors.size(1), char_vectors.size(1))
         else:
-            self.proj = nn.Linear(word_vectors.size(1) + char_vectors.size(1), hidden_size, bias=False)
+            self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
         self.hwy = HighwayEncoder(2, hidden_size)
 
     def forward(self, x1, x2=None):
@@ -41,7 +46,15 @@ class Embedding(nn.Module):
         else:
             word_emb = self.word_emb(x1)
             char_emb = self.char_emb(x2)
-            emb = torch.cat([word_emb, char_emb])
+###################################################################
+            char_emb = char_emb.permute(0, 3, 1, 2)
+            char_emb = self.conv2d(char_emb)
+            char_emb, idx = torch.max(char_emb, dim=-1)
+            char_emb = char_emb.transpose(1, 2)
+#######################################################################
+            #print(word_emb.size())
+            #print(char_emb.size())
+            emb = torch.cat([word_emb, char_emb], dim=-1)
         emb = F.dropout(emb, self.drop_prob, self.training)
         emb = self.proj(emb)  # (batch_size, seq_len, hidden_size)
         emb = self.hwy(emb)   # (batch_size, seq_len, hidden_size)
