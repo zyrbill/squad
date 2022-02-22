@@ -135,6 +135,12 @@ def get_train_args():
                         default=0.999,
                         help='Decay rate for exponential moving average of parameters.')
 
+    # Baseline model arguments #############################################
+    parser.add_argument('--baseline_char_emb',
+                        type=bool,
+                        default=False,
+                        help='Use character embedding for BiDAF baseline')
+
     args = parser.parse_args()
 
     if args.metric_name == 'NLL':
