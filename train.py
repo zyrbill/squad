@@ -17,7 +17,7 @@ import util
 from args import get_train_args
 from collections import OrderedDict
 from json import dumps
-from models import BiDAF
+from models import BiDAF, QANet
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from ujson import load as json_load
@@ -57,10 +57,14 @@ def main(args):
                       hidden_size=args.hidden_size,
                       drop_prob=args.drop_prob, 
                       use_char_emb=args.baseline_char_emb)
-        print('baseline model!!!!!!')
-        print(args.baseline_char_emb)
+    elif args.name == 'qanet':
+        model = QANet(word_vectors=word_vectors,
+                      char_vectors=char_vectors,
+                      hidden_size=args.hidden_size,
+                      drop_prob=args.drop_prob,
+                      num_head=args.num_head)
     else:
-        raise NotImplemented
+        raise NotImplementedError
     model = nn.DataParallel(model, args.gpu_ids)
     if args.load_path:
         log.info(f'Loading checkpoint from {args.load_path}...')
@@ -221,4 +225,10 @@ def evaluate(model, data_loader, device, eval_file, max_len, use_squad_v2):
 
 
 if __name__ == '__main__':
+    import gc
+
+    gc.collect()
+    import torch
+    torch.cuda.empty_cache()
+
     main(get_train_args())

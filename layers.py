@@ -35,7 +35,6 @@ class Embedding(nn.Module):
             nn.init.xavier_uniform_(self.conv2d.weight)
 ############################################
             self.proj = nn.Linear(word_vectors.size(1) + 200, hidden_size, bias=False)
-            #print(word_vectors.size(1), char_vectors.size(1))
         else:
             self.proj = nn.Linear(word_vectors.size(1), hidden_size, bias=False)
         self.hwy = HighwayEncoder(2, hidden_size)
