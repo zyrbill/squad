@@ -111,7 +111,7 @@ def get_train_args():
                         help='Number of epochs for which to train. Negative means forever.')
     parser.add_argument('--drop_prob',
                         type=float,
-                        default=0.2,
+                        default=0.1,
                         help='Probability of zeroing an activation in dropout layers.')
     parser.add_argument('--metric_name',
                         type=str,
@@ -134,21 +134,6 @@ def get_train_args():
                         type=float,
                         default=0.999,
                         help='Decay rate for exponential moving average of parameters.')
-
-    # Baseline model arguments ###############################################
-    parser.add_argument('--baseline_char_emb',
-                        type=bool,
-                        default=False,
-                        help='Use character embedding for BiDAF baseline')
-
-
-    # QANet model arguments ##################################################
-
-    parser.add_argument('--num_head',
-                        type=int,
-                        default=4,
-                        help='Number of attention heads used for QANet')
-
 
     args = parser.parse_args()
 
@@ -257,3 +242,17 @@ def add_train_test_args(parser):
                         type=str,
                         default=None,
                         help='Path to load as a model checkpoint.')
+
+    # Baseline model arguments ###############################################
+    parser.add_argument('--baseline_char_emb',
+                        type=bool,
+                        default=False,
+                        help='Use character embedding for BiDAF baseline')
+
+
+    # QANet model arguments ##################################################
+
+    parser.add_argument('--num_head',
+                        type=int,
+                        default=4,
+                        help='Number of attention heads used for QANet')

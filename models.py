@@ -68,6 +68,7 @@ class BiDAF(nn.Module):
 
         att = self.att(c_enc, q_enc,
                        c_mask, q_mask)    # (batch_size, c_len, 8 * hidden_size)
+        print('BiDAF Attention', print(att.size()))
 
         mod = self.mod(att, c_len)        # (batch_size, c_len, 2 * hidden_size)
 
@@ -76,43 +77,40 @@ class BiDAF(nn.Module):
         return out
 
 class QANet(nn.Module):
-    def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob=0.1, num_head=1, pad=0):  # !!! notice: set it to be a config parameter later.
+    def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob=0.1, num_head=8):  # !!! notice: set it to be a config parameter later.
         super().__init__()
         self.emb = qanet_layers.Embedding(word_vectors, char_vectors, hidden_size, drop_prob=drop_prob)
         self.num_head = num_head
-        self.emb_enc = qanet_layers.EncoderBlock(conv_num=4, hidden_size=hidden_size, num_head=num_head, k=7, drop_prob=0.1)
-        self.cq_att = qanet_layers.CQAttention(hidden_size=hidden_size)
+        self.emb_enc = qanet_layers.EncoderBlock(conv_num=4, hidden_size=hidden_size, num_head=num_head, kernel_size=7, drop_prob=0.1)
+        self.cq_att = layers.BiDAFAttention(hidden_size=hidden_size, drop_prob=drop_prob)
+        #self.cq_att = qanet_layers.CQAttention(hidden_size=hidden_size)
+        #self.cq_resizer = nn.Linear(hidden_size*4, hidden_size)
         self.cq_resizer = qanet_layers.Initialized_Conv1d(hidden_size * 4, hidden_size)
-        self.model_enc_blks = nn.ModuleList([qanet_layers.EncoderBlock(conv_num=2, hidden_size=hidden_size, num_head=num_head, k=5, drop_prob=0.1) for _ in range(7)])
-        self.out = qanet_layers.Pointer(hidden_size)
-        self.PAD = pad
+        self.model_enc_blks = nn.ModuleList([qanet_layers.EncoderBlock(conv_num=2, hidden_size=hidden_size, num_head=num_head, kernel_size=5, drop_prob=0.1) for _ in range(5)])
+        self.out = qanet_layers.Output(hidden_size)
         self.hidden_size = hidden_size
         self.drop_prob = drop_prob
 
-    def forward(self, Cwid, Qwid, Ccid, Qcid):
-        maskC = (torch.ones_like(Cwid) *
-                 self.PAD != Cwid).float()
-        maskQ = (torch.ones_like(Qwid) *
-                 self.PAD != Qwid).float()
-        #Cw, Cc = self.word_emb(Cwid), self.char_emb(Ccid)
-        #Qw, Qc = self.word_emb(Qwid), self.char_emb(Qcid)
+    def forward(self, cw_idxs, qw_idxs, cc_idxs, qc_idxs):
+        c_mask = (torch.zeros_like(cw_idxs) != cw_idxs).float()  #  different
+        q_mask = (torch.zeros_like(qw_idxs) != qw_idxs).float()
         
-        C, Q = self.emb(Cwid, Ccid), self.emb(Qwid, Qcid)
+        c_emb, q_emb = self.emb(cw_idxs, cc_idxs), self.emb(qw_idxs, qc_idxs)
 
-        Ce = self.emb_enc(C, maskC, 1, 1)
-        Qe = self.emb_enc(Q, maskQ, 1, 1)
-        X = self.cq_att(Ce, Qe, maskC, maskQ)
-        M0 = self.cq_resizer(X)
+        c_enc = self.emb_enc(c_emb, c_mask)
+        q_enc = self.emb_enc(q_emb, q_mask)
+        x = self.cq_att(c_enc, q_enc, c_mask, q_mask)
+        M0 = self.cq_resizer(x.transpose(1,2)).transpose(1,2)    # not the same dim as bang liu
         M0 = F.dropout(M0, p=self.drop_prob, training=self.training)
         for i, blk in enumerate(self.model_enc_blks):
-             M0 = blk(M0, maskC, i*(2+2)+1, 7)
+             M0 = blk(M0, c_mask)
         M1 = M0
         for i, blk in enumerate(self.model_enc_blks):
-             M0 = blk(M0, maskC, i*(2+2)+1, 7)
+             M0 = blk(M0, c_mask)
         M2 = M0
         M0 = F.dropout(M0, p=self.drop_prob, training=self.training)
         for i, blk in enumerate(self.model_enc_blks):
-             M0 = blk(M0, maskC, i*(2+2)+1, 7)
+             M0 = blk(M0, c_mask)
         M3 = M0
-        p1, p2 = self.out(M1, M2, M3, maskC)
+        p1, p2 = self.out(M1, M2, M3, c_mask)
         return p1, p2

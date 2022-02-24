@@ -21,7 +21,7 @@ import util
 from args import get_test_args
 from collections import OrderedDict
 from json import dumps
-from models import BiDAF
+from models import BiDAF, QANet
 from os.path import join
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
@@ -54,6 +54,11 @@ def main(args):
                       char_vectors=char_vectors,
                       hidden_size=args.hidden_size,
                       use_char_emb=True)
+    elif args.name == 'qanet':
+        model = QANet(word_vectors=word_vectors,
+                      char_vectors=char_vectors,
+                      hidden_size=args.hidden_size,
+                      num_head=args.num_head)
     else:
         raise NotImplementedError
     model = nn.DataParallel(model, gpu_ids)
