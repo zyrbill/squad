@@ -2,6 +2,8 @@
 
 Usage:
     > python test.py --split SPLIT --load_path PATH --name NAME
+
+    example: python test.py --split dev --load_path save/train/qanet-10/best.pth.tar --name qanet --hidden_size 128 --num_head 4
     where
     > SPLIT is either "dev" or "test"
     > PATH is a path to a checkpoint (e.g., save/train/model-01/best.pth.tar)
@@ -21,7 +23,7 @@ import util
 from args import get_test_args
 from collections import OrderedDict
 from json import dumps
-from models import BiDAF, QANet
+from models import BiDAF, QANet, UnifiedQANet
 from os.path import join
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
@@ -59,6 +61,13 @@ def main(args):
                       char_vectors=char_vectors,
                       hidden_size=args.hidden_size,
                       num_head=args.num_head)
+    elif args.name == 'uqanet':
+        model = UnifiedQANet(word_vectors=word_vectors,
+                             char_vectors=char_vectors,
+                             hidden_size=args.hidden_size,
+                             num_head=args.num_head,
+                             num_emb_encoder=args.num_emb_encoder,
+                             num_mdl_encoder=args.num_mdl_encoder)
     else:
         raise NotImplementedError
     model = nn.DataParallel(model, gpu_ids)
@@ -121,7 +130,7 @@ def main(args):
             sub_dict.update(uuid2pred)
 
     # Log results (except for test set, since it does not come with labels)
-    if args.split != 'test':
+    if args.split != 'test': 
         results = util.eval_dicts(gold_dict, pred_dict, args.use_squad_v2)
         results_list = [('NLL', nll_meter.avg),
                         ('F1', results['F1']),

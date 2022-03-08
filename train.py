@@ -17,7 +17,7 @@ import util
 from args import get_train_args
 from collections import OrderedDict
 from json import dumps
-from models import BiDAF, QANet
+from models import BiDAF, QANet, UnifiedQANet
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from ujson import load as json_load
@@ -63,6 +63,14 @@ def main(args):
                       hidden_size=args.hidden_size,
                       drop_prob=args.drop_prob,
                       num_head=args.num_head)
+    elif args.name == 'uqanet':
+        model = UnifiedQANet(word_vectors=word_vectors,
+                      char_vectors=char_vectors,
+                      hidden_size=args.hidden_size,
+                      drop_prob=args.drop_prob,
+                      num_head=args.num_head, 
+                      num_emb_encoder=args.num_emb_encoder,
+                      num_mdl_encoder=args.num_mdl_encoder)
     else:
         raise NotImplementedError
     model = nn.DataParallel(model, args.gpu_ids)

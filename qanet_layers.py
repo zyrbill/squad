@@ -11,23 +11,23 @@ from util import masked_softmax
 import layers
 
 class Embedding(nn.Module):
-    def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob=0.1):   # use proj instead of Conv1D
+    def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob=0.1): 
         super(Embedding, self).__init__()
         self.drop_prob = drop_prob
         self.word_emb = nn.Embedding.from_pretrained(word_vectors)
         self.char_emb = nn.Embedding.from_pretrained(char_vectors)
         self.conv2d = nn.Conv2d(64, hidden_size, kernel_size=(1, 5))
         nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
-        #self.proj = nn.Linear(word_vectors.size(1) + 200, hidden_size, bias=False)
-        self.conv1d_word = Initialized_Conv1d(word_vectors.size(1), hidden_size, bias=False)
-        self.conv1d = Initialized_Conv1d(2*hidden_size, hidden_size, bias=False)
+        self.proj_word = FeedForward(word_vectors.size(1), hidden_size, bias=False)
+        self.proj = FeedForward(2*hidden_size, hidden_size, bias=False)
         self.hwy = layers.HighwayEncoder(2, hidden_size)
 
     def forward(self, x1, x2):
+        #print(x1.shape)
+        #print(x2.shape)
         word_emb = self.word_emb(x1)
         word_emb = F.dropout(word_emb, p=self.drop_prob, training=self.training)
-        word_emb = word_emb.transpose(1,2)
-        word_emb = self.conv1d_word(word_emb)
+        word_emb = self.proj_word(word_emb)
         
         char_emb = self.char_emb(x2)
         char_emb = char_emb.permute(0, 3, 1, 2)    # batch, char_channel, seq_len, char_limit
@@ -35,22 +35,21 @@ class Embedding(nn.Module):
         char_emb = self.conv2d(char_emb)
         char_emb = F.relu(char_emb)
         char_emb, idx = torch.max(char_emb, dim=-1)
+        char_emb = char_emb.transpose(1,2)
 
-        emb = torch.cat([word_emb, char_emb], dim=1)
-        emb = self.conv1d(emb)
-        emb = emb.transpose(1,2)
+        emb = torch.cat([word_emb, char_emb], dim=-1)
+        emb = self.proj(emb)
         emb = self.hwy(emb)   
-        #emb = emb.transpose(1,2) # (batch_size, seq_len, hidden_size)
         return emb
 
-class EncoderBlock(nn.Module):  # do not understando posEncoder
+class EncoderBlock(nn.Module):  
     def __init__(self, conv_num=4, hidden_size=128, num_head=8, kernel_size=7, drop_prob=0.1):
         super().__init__()
+        #self.pos_encoder = PositionalEncoding(hidden_size, dropout=drop_prob)
         self.convs = nn.ModuleList([DepthwiseSeparableConv(hidden_size, hidden_size, kernel_size) for _ in range(conv_num)])
-        #self.self_att = SelfAttention(hidden_size, num_head, drop_prob=drop_prob)
         self.self_attention = nn.MultiheadAttention(hidden_size, num_head, dropout=drop_prob, batch_first=True)
-        self.ffn_1 = Initialized_Conv1d(hidden_size, hidden_size, relu=True, bias=True)
-        self.ffn_2 = Initialized_Conv1d(hidden_size, hidden_size, bias=True)
+        self.ffn_1 = FeedForward(hidden_size, hidden_size, relu=True, bias=True)
+        self.ffn_2 = FeedForward(hidden_size, hidden_size, bias=True)
         self.layer_norm_convs = nn.ModuleList([nn.LayerNorm(hidden_size) for _ in range(conv_num)])
         self.layer_norm_attention = nn.LayerNorm(hidden_size)
         self.layer_norm_ffn = nn.LayerNorm(hidden_size)
@@ -58,8 +57,8 @@ class EncoderBlock(nn.Module):  # do not understando posEncoder
         self.drop_prob = drop_prob
 
     def forward(self, x, mask):
-        #total_layers = (self.conv_num + 1) * blks
         out = PosEncoder(x)
+        #out = self.pos_encoder(x)
         for i, conv in enumerate(self.convs):
             res = out
             out = self.layer_norm_convs[i](out)
@@ -71,17 +70,15 @@ class EncoderBlock(nn.Module):  # do not understando posEncoder
         res = out
         out = self.layer_norm_attention(out)
         out = F.dropout(out, p=self.drop_prob, training=self.training)
-        #print('self_attention', out.size())
         out, _ = self.self_attention(out, out, out, mask)
-        #print('self_attention 2', out.size())
         out = F.dropout(out, p=self.drop_prob, training=self.training)
         out = self.residual_block(out, res)
 
         res = out
         out = self.layer_norm_ffn(out)
         out = F.dropout(out, p=self.drop_prob, training=self.training)
-        out = self.ffn_1(out.transpose(1,2)).transpose(1,2)
-        out = self.ffn_2(out.transpose(1,2)).transpose(1,2)
+        out = self.ffn_1(out)
+        out = self.ffn_2(out)
         out = F.dropout(out, p=self.drop_prob, training=self.training)
         out = self.residual_block(out, res)
         return out
@@ -100,57 +97,62 @@ class DepthwiseSeparableConv(nn.Module):
 
     def forward(self, x):
         out = self.depthwise(x)
-        out = self.pointwise(out)             # bad mistake, no depthwise conv
+        out = self.pointwise(out)           
         return out
+
+class FeedForward(nn.Module):
+    def __init__(self, in_features, out_features, relu=False, bias=False):
+        super().__init__()
+        self.out = nn.Linear(in_features=in_features, out_features=out_features, bias=bias)
+        self.relu = relu
+        if self.relu is True:
+            nn.init.kaiming_normal_(self.out.weight, nonlinearity='relu')
+        else:
+            nn.init.xavier_uniform_(self.out.weight)
+
+    def forward(self, x):
+        return F.relu(self.out(x)) if self.relu else self.out(x)
 
 class Output(nn.Module):
     def __init__(self, hidden_size):
         super().__init__()
-        self.w1 = Initialized_Conv1d(hidden_size*2, 1)
-        self.w2 = Initialized_Conv1d(hidden_size*2, 1)
+        self.w1 = FeedForward(hidden_size*2, 1)
+        self.w2 = FeedForward(hidden_size*2, 1)
 
     def forward(self, M1, M2, M3, mask):
         X1 = torch.cat([M1, M2], dim=-1)
         X2 = torch.cat([M1, M3], dim=-1)
-        Y1 = mask_logits(self.w1(X1.transpose(1,2)).squeeze(), mask)
-        Y2 = mask_logits(self.w2(X2.transpose(1,2)).squeeze(), mask)
-        p1, p2 = F.log_softmax(Y1, dim=1), F.log_softmax(Y2, dim=1)
-        return p1, p2
+        log_p1 = masked_softmax(self.w1(X1).squeeze(), mask, log_softmax=True)
+        log_p2 = masked_softmax(self.w2(X2).squeeze(), mask, log_softmax=True)
+        return log_p1, log_p2
 
-def mask_logits(target, mask):
-    mask = mask.type(torch.float32)
-    return target * mask + (1 - mask) * (-1e30)  # !!!!!!!!!!!!!!!  do we need * mask after target?
-
-
-class Initialized_Conv1d(nn.Module):
-    def __init__(self, in_channels, out_channels,
-                 kernel_size=1, stride=1, padding=0, groups=1,
-                 relu=False, bias=False):
+class CondOutput(nn.Module):
+    def __init__(self, hidden_size):
         super().__init__()
-        self.out = nn.Conv1d(
-            in_channels, out_channels,
-            kernel_size, stride=stride,
-            padding=padding, groups=groups, bias=bias)
-        if relu is True:
-            self.relu = True
-            nn.init.kaiming_normal_(self.out.weight, nonlinearity='relu')
-        else:
-            self.relu = False
-            nn.init.xavier_uniform_(self.out.weight)
+        self.w1 = FeedForward(hidden_size*2, 1)
+        self.w2 = FeedForward(hidden_size*2, hidden_size)
+        self.w3 = FeedForward(hidden_size*2, hidden_size, relu=True)
+        self.w4 = FeedForward(hidden_size*2, 1)
 
-    def forward(self, x):
-        if self.relu is True:
-            return F.relu(self.out(x))
-        else:
-            return self.out(x)
+    def forward(self, M1, M2, M3, mask):
+        X1 = torch.cat([M1, M2], dim=-1)
+        X2 = torch.cat([M1, M3], dim=-1)
+        log_p1 = masked_softmax(self.w1(X1).squeeze(), mask, log_softmax=True)
+        L = log_p1.view(X1.shape[0], X1.shape[1], 1)
+        A = self.w2(L*X1)
+        B = self.w3(X2)
+        X3 = torch.cat([A, B], dim=-1)
+        log_p2 = masked_softmax(self.w4(X3).squeeze(), mask, log_softmax=True)
+        return log_p1, log_p2
+
 
 def PosEncoder(x, min_timescale=1.0, max_timescale=1.0e4):   # previous wrong (no added signal)
-    #print('in posEncoder !!!!!!!!!', x.size())
+    #print('in posEncoder !!!!!!!!!', x.shape)
     #x = x.transpose(1, 2)
-    length = x.size()[1]
-    channels = x.size()[2]
+    length = x.shape[1]
+    channels = x.shape[2]
     signal = get_timing_signal(length, channels, min_timescale, max_timescale)
-    #print('signal size', signal.size())
+    #print('signal size', signal.shape)
     return (x + signal.to(x.get_device()))#.transpose(1, 2)
 
 def get_timing_signal(length, channels,
@@ -166,6 +168,4 @@ def get_timing_signal(length, channels,
     signal = m(signal)
     signal = signal.view(1, length, channels)
     return signal
-
-
 
