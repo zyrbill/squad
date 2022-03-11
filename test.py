@@ -67,7 +67,8 @@ def main(args):
                              hidden_size=args.hidden_size,
                              num_head=args.num_head,
                              num_emb_encoder=args.num_emb_encoder,
-                             num_mdl_encoder=args.num_mdl_encoder)
+                             num_mdl_encoder=args.num_mdl_encoder, 
+                             use_verifier=args.use_verifier)
     else:
         raise NotImplementedError
     model = nn.DataParallel(model, gpu_ids)
@@ -106,7 +107,7 @@ def main(args):
             batch_size = cw_idxs.size(0)
 
             # Forward
-            log_p1, log_p2 = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
+            log_p1, log_p2, *_ = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
             y1, y2 = y1.to(device), y2.to(device)
             loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2)
             nll_meter.update(loss.item(), batch_size)

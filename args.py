@@ -245,7 +245,7 @@ def add_train_test_args(parser):
 
     # Baseline model arguments ###############################################
     parser.add_argument('--baseline_char_emb',
-                        type=bool,
+                        type=lambda s: s.lower().startswith('t'),
                         default=False,
                         help='Use character embedding for BiDAF baseline')
 
@@ -267,3 +267,8 @@ def add_train_test_args(parser):
                         type=int,
                         default=5,
                         help='Number of model encoders')
+
+    parser.add_argument('--use_verifier',
+                        type=lambda s: s.lower().startswith('t'),
+                        default=False,
+                        help='Use answer verifier for UQANet')

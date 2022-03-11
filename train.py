@@ -70,7 +70,8 @@ def main(args):
                       drop_prob=args.drop_prob,
                       num_head=args.num_head, 
                       num_emb_encoder=args.num_emb_encoder,
-                      num_mdl_encoder=args.num_mdl_encoder)
+                      num_mdl_encoder=args.num_mdl_encoder,
+                      use_verifier=args.use_verifier)
     else:
         raise NotImplementedError
     model = nn.DataParallel(model, args.gpu_ids)
@@ -129,10 +130,30 @@ def main(args):
                 optimizer.zero_grad()
 
                 # Forward
-                log_p1, log_p2 = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
-                y1, y2 = y1.to(device), y2.to(device)
-                loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2)
-                loss_val = loss.item()
+                if args.use_verifier:
+                    na = ((y1 == 0) & (y2==0)).float()
+                    log_p1, log_p2, log_pna = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
+                    y1, y2, na = y1.to(device), y2.to(device), na.to(device)
+                    '''
+                    print('target')
+                    print(y1.shape, y2.shape, na.shape)
+                    print('input')
+                    print(log_p1.shape, log_p2.shape, log_pna.exp().shape)
+                    print('loss')
+                    print(F.nll_loss(log_p1, y1))
+                    print(F.nll_loss(log_p2, y2))
+                    print(F.binary_cross_entropy(log_pna.exp(), na))
+                    print(F.nll_loss(log_p1, y1).shape)
+                    print(F.nll_loss(log_p2, y2).shape)
+                    print(F.binary_cross_entropy(log_pna.exp(), na).shape)
+                    '''
+                    loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2) + F.binary_cross_entropy(log_pna.exp(), na)
+                    loss_val = loss.item()
+                else:
+                    log_p1, log_p2 = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
+                    y1, y2 = y1.to(device), y2.to(device)
+                    loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2)
+                    loss_val = loss.item()
 
                 # Backward
                 loss.backward()
@@ -161,7 +182,8 @@ def main(args):
                     results, pred_dict = evaluate(model, dev_loader, device,
                                                   args.dev_eval_file,
                                                   args.max_ans_len,
-                                                  args.use_squad_v2)
+                                                  args.use_squad_v2,
+                                                  args.use_verifier)
                     saver.save(step, model, results[args.metric_name], device)
                     ema.resume(model)
 
@@ -181,7 +203,7 @@ def main(args):
                                    num_visuals=args.num_visuals)
 
 
-def evaluate(model, data_loader, device, eval_file, max_len, use_squad_v2):
+def evaluate(model, data_loader, device, eval_file, max_len, use_squad_v2, use_verifier=False):
     nll_meter = util.AverageMeter()
 
     model.eval()
@@ -199,14 +221,25 @@ def evaluate(model, data_loader, device, eval_file, max_len, use_squad_v2):
             batch_size = cw_idxs.size(0)
 
             # Forward
-            log_p1, log_p2 = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
-            y1, y2 = y1.to(device), y2.to(device)
-            loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2)
-            nll_meter.update(loss.item(), batch_size)
+            if use_verifier:
+                na = ((y1 == 0) & (y2==0)).float()
+                log_p1, log_p2, log_pna = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
+                y1, y2, na = y1.to(device), y2.to(device), na.to(device)
+                loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2) + F.binary_cross_entropy(log_pna.exp(), na)
+                nll_meter.update(loss.item(), batch_size)
 
-            # Get F1 and EM scores
-            p1, p2 = log_p1.exp(), log_p2.exp()
-            starts, ends = util.discretize(p1, p2, max_len, use_squad_v2)
+                # Get F1 and EM scores
+                p1, p2 = log_p1.exp(), log_p2.exp()
+                starts, ends = util.discretize(p1, p2, max_len, use_squad_v2)
+            else:
+                log_p1, log_p2 = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
+                y1, y2 = y1.to(device), y2.to(device)
+                loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2)
+                nll_meter.update(loss.item(), batch_size)
+
+                # Get F1 and EM scores
+                p1, p2 = log_p1.exp(), log_p2.exp()
+                starts, ends = util.discretize(p1, p2, max_len, use_squad_v2)
 
             # Log info
             progress_bar.update(batch_size)

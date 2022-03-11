@@ -20,6 +20,8 @@ class Embedding(nn.Module):
         nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
         self.proj_word = FeedForward(word_vectors.size(1), hidden_size, bias=False)
         self.proj = FeedForward(2*hidden_size, hidden_size, bias=False)
+        self.conv1d_word = FeedForward(word_vectors.size(1), hidden_size, bias=False)
+        self.conv1d = FeedForward(2*hidden_size, hidden_size, bias=False)
         self.hwy = layers.HighwayEncoder(2, hidden_size)
 
     def forward(self, x1, x2):
@@ -28,6 +30,7 @@ class Embedding(nn.Module):
         word_emb = self.word_emb(x1)
         word_emb = F.dropout(word_emb, p=self.drop_prob, training=self.training)
         word_emb = self.proj_word(word_emb)
+        #word_emb = self.conv1d_word(word_emb)
         
         char_emb = self.char_emb(x2)
         char_emb = char_emb.permute(0, 3, 1, 2)    # batch, char_channel, seq_len, char_limit
@@ -39,6 +42,7 @@ class Embedding(nn.Module):
 
         emb = torch.cat([word_emb, char_emb], dim=-1)
         emb = self.proj(emb)
+        #emb = self.conv1d(emb)
         emb = self.hwy(emb)   
         return emb
 
@@ -56,9 +60,14 @@ class EncoderBlock(nn.Module):
         self.conv_num = conv_num
         self.drop_prob = drop_prob
 
+    def residual_block(self, out, res):
+        if self.training:
+            return F.dropout(out, self.drop_prob, training=self.training) + res
+        else:
+            return out + res
+
     def forward(self, x, mask):
         out = PosEncoder(x)
-        #out = self.pos_encoder(x)
         for i, conv in enumerate(self.convs):
             res = out
             out = self.layer_norm_convs[i](out)
@@ -71,7 +80,6 @@ class EncoderBlock(nn.Module):
         out = self.layer_norm_attention(out)
         out = F.dropout(out, p=self.drop_prob, training=self.training)
         out, _ = self.self_attention(out, out, out, mask)
-        out = F.dropout(out, p=self.drop_prob, training=self.training)
         out = self.residual_block(out, res)
 
         res = out
@@ -79,15 +87,8 @@ class EncoderBlock(nn.Module):
         out = F.dropout(out, p=self.drop_prob, training=self.training)
         out = self.ffn_1(out)
         out = self.ffn_2(out)
-        out = F.dropout(out, p=self.drop_prob, training=self.training)
         out = self.residual_block(out, res)
         return out
-
-    def residual_block(self, out, res):
-        if self.training:
-            return F.dropout(out, self.drop_prob, training=self.training) + res
-        else:
-            return out + res
 
 class DepthwiseSeparableConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, bias=True):
@@ -126,34 +127,11 @@ class Output(nn.Module):
         log_p2 = masked_softmax(self.w2(X2).squeeze(), mask, log_softmax=True)
         return log_p1, log_p2
 
-class CondOutput(nn.Module):
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.w1 = FeedForward(hidden_size*2, 1)
-        self.w2 = FeedForward(hidden_size*2, hidden_size)
-        self.w3 = FeedForward(hidden_size*2, hidden_size, relu=True)
-        self.w4 = FeedForward(hidden_size*2, 1)
-
-    def forward(self, M1, M2, M3, mask):
-        X1 = torch.cat([M1, M2], dim=-1)
-        X2 = torch.cat([M1, M3], dim=-1)
-        log_p1 = masked_softmax(self.w1(X1).squeeze(), mask, log_softmax=True)
-        L = log_p1.view(X1.shape[0], X1.shape[1], 1)
-        A = self.w2(L*X1)
-        B = self.w3(X2)
-        X3 = torch.cat([A, B], dim=-1)
-        log_p2 = masked_softmax(self.w4(X3).squeeze(), mask, log_softmax=True)
-        return log_p1, log_p2
-
-
-def PosEncoder(x, min_timescale=1.0, max_timescale=1.0e4):   # previous wrong (no added signal)
-    #print('in posEncoder !!!!!!!!!', x.shape)
-    #x = x.transpose(1, 2)
+def PosEncoder(x, min_timescale=1.0, max_timescale=1.0e4):  
     length = x.shape[1]
     channels = x.shape[2]
     signal = get_timing_signal(length, channels, min_timescale, max_timescale)
-    #print('signal size', signal.shape)
-    return (x + signal.to(x.get_device()))#.transpose(1, 2)
+    return (x + signal.to(x.get_device()))
 
 def get_timing_signal(length, channels,
                       min_timescale=1.0, max_timescale=1.0e4):
