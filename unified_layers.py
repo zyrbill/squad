@@ -31,17 +31,12 @@ class Embedding(nn.Module):
     def forward(self, cw_idxs, qw_idxs, cc_idxs, qc_idxs):
         seg_c = torch.zeros_like(cw_idxs)
         seg_q = torch.ones_like(qw_idxs)
-        #print(seg_c.shape)
-        #print(seg_q.shape)
         seg = torch.cat([seg_c, seg_q], dim=-1)
-
         x1 = torch.cat([cw_idxs, qw_idxs], dim=-1)
         x2 = torch.cat([cc_idxs, qc_idxs], dim=1)
-
         word_emb = self.word_emb(x1)
         word_emb = F.dropout(word_emb, p=self.drop_prob, training=self.training)
         word_emb = self.conv1d_word(word_emb)
-        
         char_emb = self.char_emb(x2)
         char_emb = char_emb.permute(0, 3, 1, 2)    # batch, char_channel, seq_len, char_limit
         char_emb = F.dropout(char_emb, p=self.drop_prob, training=self.training)
@@ -49,7 +44,6 @@ class Embedding(nn.Module):
         char_emb = F.relu(char_emb)
         char_emb, idx = torch.max(char_emb, dim=-1)
         char_emb = char_emb.transpose(1,2)
-
         emb = torch.cat([word_emb, char_emb], dim=-1)
         emb = self.conv1d(emb)
         emb = self.hwy(emb)   
@@ -72,14 +66,8 @@ class VerifierOutput(nn.Module):
         log_p2 = masked_softmax(self.w2(X2).squeeze(), mask, log_softmax=True)
         p1 = masked_softmax(self.w1(X1).squeeze(), mask, log_softmax=False).view(X1.shape[0], X1.shape[1], 1)
         p2 = masked_softmax(self.w2(X2).squeeze(), mask, log_softmax=False).view(X2.shape[0], X2.shape[1], 1)
-        #print(p1.shape)
-        #print(p2.shape)
-        #print(X1.shape)
-        #print(X2.shape)
         A = torch.sum(p1*X1, dim=1)
         B = torch.sum(p2*X2, dim=1)
-        #print(A.shape, B.shape)
         C = torch.cat([A,B], dim=-1)
-        #print(C.shape)
         log_pna = self.log_sigmoid(self.w3(C)).squeeze()
         return log_p1, log_p2, log_pna
