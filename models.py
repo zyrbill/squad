@@ -93,6 +93,7 @@ class QANetModelEncoder(nn.Module):
         for blk in self.model_enc_blks:
              m0 = blk(m0, c_mask)
         m1 = m0
+        m0 = F.dropout(m0, p=self.drop_prob, training=self.training)
         for blk in self.model_enc_blks:
              m0 = blk(m0, c_mask)
         m2 = m0
@@ -113,7 +114,7 @@ class QANet(nn.Module):
         self.emb = qanet_layers.Embedding(word_vectors, char_vectors, hidden_size, drop_prob=drop_prob)
         self.emb_enc = qanet_layers.EncoderBlock(conv_num=4, hidden_size=hidden_size, num_head=num_head, 
                                                  kernel_size=7, drop_prob=drop_prob)
-        self.cq_att = layers.BiDAFAttention(hidden_size=hidden_size, drop_prob=drop_prob)
+        self.att = layers.BiDAFAttention(hidden_size=hidden_size, drop_prob=drop_prob)
         self.proj = qanet_layers.FeedForward(hidden_size * 4, hidden_size)
         self.model_enc_blks = nn.ModuleList([qanet_layers.EncoderBlock(conv_num=2, hidden_size=hidden_size, num_head=num_head, 
                                                                        kernel_size=5, drop_prob=drop_prob) for _ in range(5)])
@@ -126,7 +127,7 @@ class QANet(nn.Module):
         c_emb, q_emb = self.emb(cw_idxs, cc_idxs), self.emb(qw_idxs, qc_idxs)
         c_enc, q_enc = self.emb_enc(c_emb, c_mask), self.emb_enc(q_emb, q_mask)
         
-        x = self.cq_att(c_enc, q_enc, c_mask, q_mask)
+        x = self.att(c_enc, q_enc, c_mask, q_mask)
         m0 = self.proj(x)
         m1, m2, m3 = self.model_enc(m0, c_mask)
         p1, p2 = self.out(m1, m2, m3, c_mask)
@@ -134,7 +135,8 @@ class QANet(nn.Module):
 
 
 class UnifiedQANet(nn.Module):
-    def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob=0.1, num_head=8, num_emb_encoder=1, num_mdl_encoder=5, use_verifier=False):
+    def __init__(self, word_vectors, char_vectors, hidden_size, drop_prob=0.1, 
+                 num_head=8, num_emb_encoder=1, num_mdl_encoder=5, use_verifier=False):
         super().__init__()
         self.hidden_size = hidden_size
         self.drop_prob = drop_prob
@@ -144,8 +146,8 @@ class UnifiedQANet(nn.Module):
         self.emb = unified_layers.Embedding(word_vectors, char_vectors, hidden_size, drop_prob=drop_prob)
         self.emb_enc_blks = nn.ModuleList([qanet_layers.EncoderBlock(conv_num=4, hidden_size=hidden_size, num_head=num_head, 
                                                                      kernel_size=7, drop_prob=drop_prob) for _ in range(num_emb_encoder)])
-        self.cq_att = layers.BiDAFAttention(hidden_size=hidden_size, drop_prob=drop_prob)
-        self.proj = qanet_layers.FeedForward(hidden_size * 4, hidden_size)
+        self.att = layers.BiDAFAttention(hidden_size=hidden_size, drop_prob=drop_prob)
+        self.proj = qanet_layers.FeedForward(hidden_size*4, hidden_size)
         self.model_enc_blks = nn.ModuleList([qanet_layers.EncoderBlock(conv_num=2, hidden_size=hidden_size, num_head=num_head, 
                                                                        kernel_size=5, drop_prob=drop_prob) for _ in range(num_mdl_encoder)])
         self.model_enc = QANetModelEncoder(self.model_enc_blks, drop_prob)
@@ -161,14 +163,13 @@ class UnifiedQANet(nn.Module):
         mask = torch.cat([c_mask, q_mask], dim=-1)
         
         enc = self.emb(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
-        for i, blk in enumerate(self.emb_enc_blks):
+        for blk in self.emb_enc_blks:
              enc = blk(enc, mask)
         
         c_enc, q_enc = enc[:,:c_len,:], enc[:,c_len:,:] 
-        m0 = self.cq_att(c_enc, q_enc, c_mask, q_mask)
+        m0 = self.att(c_enc, q_enc, c_mask, q_mask)
         m0 = self.proj(m0)
         m1, m2, m3 = self.model_enc(m0, c_mask)
-
         if self.use_verifier:
             p1, p2, pna = self.out(m1, m2, m3, c_mask)
             return p1, p2, pna

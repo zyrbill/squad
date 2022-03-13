@@ -1,4 +1,4 @@
-""" QANet layers
+""" Unifed QANet layers
 """
 
 import math
@@ -20,13 +20,11 @@ class Embedding(nn.Module):
         super(Embedding, self).__init__()
         self.drop_prob = drop_prob
         self.word_emb = nn.Embedding.from_pretrained(word_vectors)
-        self.char_emb = nn.Embedding.from_pretrained(char_vectors)
-        self.seg_emb = nn.Embedding(2, hidden_size)
-        self.conv2d = nn.Conv2d(64, hidden_size, kernel_size=(1, 5))
-        nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
+        self.char_conv = qanet_layers.CharacterConv(char_vectors, hidden_size, drop_prob)
         self.conv1d_word = qanet_layers.FeedForward(word_vectors.size(1), hidden_size, bias=False)
         self.conv1d = qanet_layers.FeedForward(2*hidden_size, hidden_size, bias=False)
         self.hwy = layers.HighwayEncoder(2, hidden_size)
+        self.seg_emb = nn.Embedding(2, hidden_size)
 
     def forward(self, cw_idxs, qw_idxs, cc_idxs, qc_idxs):
         seg_c = torch.zeros_like(cw_idxs)
@@ -34,22 +32,19 @@ class Embedding(nn.Module):
         seg = torch.cat([seg_c, seg_q], dim=-1)
         x1 = torch.cat([cw_idxs, qw_idxs], dim=-1)
         x2 = torch.cat([cc_idxs, qc_idxs], dim=1)
+
         word_emb = self.word_emb(x1)
         word_emb = F.dropout(word_emb, p=self.drop_prob, training=self.training)
         word_emb = self.conv1d_word(word_emb)
-        char_emb = self.char_emb(x2)
-        char_emb = char_emb.permute(0, 3, 1, 2)    # batch, char_channel, seq_len, char_limit
-        char_emb = F.dropout(char_emb, p=self.drop_prob, training=self.training)
-        char_emb = self.conv2d(char_emb)
-        char_emb = F.relu(char_emb)
-        char_emb, idx = torch.max(char_emb, dim=-1)
-        char_emb = char_emb.transpose(1,2)
+        char_emb = self.char_conv(x2)
+        
         emb = torch.cat([word_emb, char_emb], dim=-1)
         emb = self.conv1d(emb)
         emb = self.hwy(emb)   
         seg_emb = self.seg_emb(seg)
         out = emb + seg_emb
         return out 
+
 
 class VerifierOutput(nn.Module):
     def __init__(self, hidden_size):

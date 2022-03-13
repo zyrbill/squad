@@ -16,9 +16,7 @@ class Embedding(nn.Module):
         self.drop_prob = drop_prob
         self.word_emb = nn.Embedding.from_pretrained(word_vectors)
         self.proj_word = FeedForward(word_vectors.size(1), hidden_size, bias=False)
-        self.char_emb = nn.Embedding.from_pretrained(char_vectors)
-        self.conv2d = nn.Conv2d(64, hidden_size, kernel_size=(1, 5))
-        nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
+        self.char_conv = CharacterConv(char_vectors, hidden_size, drop_prob)
         self.proj = FeedForward(2*hidden_size, hidden_size, bias=False)
         self.hwy = layers.HighwayEncoder(2, hidden_size)
 
@@ -26,17 +24,31 @@ class Embedding(nn.Module):
         word_emb = self.word_emb(x1)
         word_emb = F.dropout(word_emb, p=self.drop_prob, training=self.training)
         word_emb = self.proj_word(word_emb)
-        char_emb = self.char_emb(x2)
-        char_emb = char_emb.permute(0, 3, 1, 2)    # batch, char_channel (64), seq_len, char_limit (16)
+        char_emb = self.char_conv(x2)
+        emb = torch.cat([word_emb, char_emb], dim=-1)
+        emb = self.proj(emb)
+        emb = self.hwy(emb)   
+        return emb
+
+
+class CharacterConv(nn.Module):
+    def __init__(self, char_vectors, hidden_size, drop_prob=0.1):
+        super(CharacterConv, self).__init__()
+        self.drop_prob = drop_prob
+        self.char_emb = nn.Embedding.from_pretrained(char_vectors)
+        self.conv2d = nn.Conv2d(64, hidden_size, kernel_size=(1, 5))
+        nn.init.kaiming_normal_(self.conv2d.weight, nonlinearity='relu')
+
+    def forward(self, x):
+        char_emb = self.char_emb(x)
+        char_emb = char_emb.permute(0, 3, 1, 2)   
         char_emb = F.dropout(char_emb, p=self.drop_prob, training=self.training)
         char_emb = self.conv2d(char_emb)
         char_emb = F.relu(char_emb)
         char_emb, idx = torch.max(char_emb, dim=-1)
         char_emb = char_emb.transpose(1,2)
-        emb = torch.cat([word_emb, char_emb], dim=-1)
-        emb = self.proj(emb)
-        emb = self.hwy(emb)   
-        return emb
+        return char_emb
+
 
 class EncoderBlock(nn.Module):  
     def __init__(self, conv_num=4, hidden_size=128, num_head=8, kernel_size=7, drop_prob=0.1):
@@ -44,23 +56,16 @@ class EncoderBlock(nn.Module):
         self.conv_num = conv_num
         self.drop_prob = drop_prob
         self.residual_connection = ResidualConnection(drop_prob)
-        self.convs = nn.ModuleList([DepthwiseSeparableConv(hidden_size, hidden_size, kernel_size) for _ in range(conv_num)])
-        self.self_attention = nn.MultiheadAttention(hidden_size, num_head, dropout=drop_prob, batch_first=True)
-        self.layer_norm_convs = nn.ModuleList([nn.LayerNorm(hidden_size) for _ in range(conv_num)])
         self.layer_norm_attention = nn.LayerNorm(hidden_size)
         self.layer_norm_ffn = nn.LayerNorm(hidden_size)
+        self.repeated_convs = RepeatedDepthwiseSeparableConv(conv_num, hidden_size, hidden_size, kernel_size, drop_prob)
+        self.self_attention = nn.MultiheadAttention(hidden_size, num_head, dropout=drop_prob, batch_first=True)
         self.ffn_1 = FeedForward(hidden_size, hidden_size, relu=True, bias=True)
         self.ffn_2 = FeedForward(hidden_size, hidden_size, bias=True)
 
     def forward(self, x, mask):
         out = PosEncoder(x)
-        for i, conv in enumerate(self.convs):
-            res = out
-            out = self.layer_norm_convs[i](out)
-            if i % 2 == 0:
-                out = F.dropout(out, p=self.drop_prob, training=self.training)
-            out = conv(out.transpose(1,2)).transpose(1,2)
-            out = self.residual_connection(out, res)
+        out = self.repeated_convs(out)
 
         res = out
         out = self.layer_norm_attention(out)
@@ -76,16 +81,40 @@ class EncoderBlock(nn.Module):
         out = self.residual_connection(out, res)
         return out
 
-class DepthwiseSeparableConv(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, bias=True):
+
+class RepeatedDepthwiseSeparableConv(nn.Module):
+    def __init__(self, repeat, in_channels, out_channels, kernel_size, drop_prob=0.1):
         super().__init__()
-        self.depthwise = nn.Conv1d(in_channels=in_channels, out_channels=in_channels, kernel_size=kernel_size, groups=in_channels, padding=kernel_size//2, bias=False)
-        self.pointwise = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=bias)
+        self.drop_prob = drop_prob
+        self.convs = nn.ModuleList([DepthwiseSeparableConv(in_channels, out_channels, kernel_size) for _ in range(repeat)])
+        self.residual_connection = ResidualConnection(drop_prob)
+        self.layer_norm_convs = nn.ModuleList([nn.LayerNorm(in_channels) for _ in range(repeat)])
+
+    def forward(self, x):
+        out = x
+        for i, conv in enumerate(self.convs):
+            res = out
+            out = self.layer_norm_convs[i](out)
+            if i % 2 == 0:
+                out = F.dropout(out, p=self.drop_prob, training=self.training)
+            out = conv(out.transpose(1,2)).transpose(1,2)
+            out = F.relu(out)
+            out = self.residual_connection(out, res)
+        return out
+
+
+class DepthwiseSeparableConv(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size):
+        super().__init__()
+        self.depthwise = nn.Conv1d(in_channels=in_channels, out_channels=in_channels, kernel_size=kernel_size, 
+                                   groups=in_channels, padding=kernel_size//2, bias=False)
+        self.pointwise = nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=True)
 
     def forward(self, x):
         out = self.depthwise(x)
         out = self.pointwise(out)           
         return out
+
 
 class FeedForward(nn.Module):
     def __init__(self, in_features, out_features, relu=False, bias=False):
@@ -100,6 +129,7 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return F.relu(self.out(x)) if self.relu else self.out(x)
 
+
 class ResidualConnection(nn.Module):
     def __init__(self, drop_prob):
         super().__init__()
@@ -110,6 +140,7 @@ class ResidualConnection(nn.Module):
             return F.dropout(x, self.drop_prob, training=self.training) + res
         else:
             return x + res
+
 
 class Output(nn.Module):
     def __init__(self, hidden_size):
@@ -124,7 +155,7 @@ class Output(nn.Module):
         return log_p1, log_p2
 
 
-# Adapted from https://github.com/BangLiu/QANet-PyTorch #############################################################
+# Adapted from https://github.com/BangLiu/QANet-PyTorch ##############################################################
 def PosEncoder(x, min_timescale=1.0, max_timescale=1.0e4):  
     length = x.shape[1]
     channels = x.shape[2]
@@ -144,4 +175,4 @@ def get_timing_signal(length, channels,
     signal = m(signal)
     signal = signal.view(1, length, channels)
     return signal
-#####################################################################################################################
+######################################################################################################################

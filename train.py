@@ -30,9 +30,6 @@ def main(args):
     log = util.get_logger(args.save_dir, args.name)
     tbx = SummaryWriter(args.save_dir)
     device, args.gpu_ids = util.get_available_devices()
-    print('**************')
-    print(device, args.gpu_ids)
-    print('**************')
     log.info(f'Args: {dumps(vars(args), indent=4, sort_keys=True)}')
     args.batch_size *= max(1, len(args.gpu_ids))
 
@@ -134,19 +131,6 @@ def main(args):
                     na = ((y1 == 0) & (y2==0)).float()
                     log_p1, log_p2, log_pna = model(cw_idxs, qw_idxs, cc_idxs, qc_idxs)
                     y1, y2, na = y1.to(device), y2.to(device), na.to(device)
-                    '''
-                    print('target')
-                    print(y1.shape, y2.shape, na.shape)
-                    print('input')
-                    print(log_p1.shape, log_p2.shape, log_pna.exp().shape)
-                    print('loss')
-                    print(F.nll_loss(log_p1, y1))
-                    print(F.nll_loss(log_p2, y2))
-                    print(F.binary_cross_entropy(log_pna.exp(), na))
-                    print(F.nll_loss(log_p1, y1).shape)
-                    print(F.nll_loss(log_p2, y2).shape)
-                    print(F.binary_cross_entropy(log_pna.exp(), na).shape)
-                    '''
                     loss = F.nll_loss(log_p1, y1) + F.nll_loss(log_p2, y2) + F.binary_cross_entropy(log_pna.exp(), na)
                     loss_val = loss.item()
                 else:

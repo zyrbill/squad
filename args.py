@@ -257,7 +257,6 @@ def add_train_test_args(parser):
                         default=4,
                         help='Number of attention heads used for QANet')
 
-    # Unified QANet
     parser.add_argument('--num_emb_encoder',
                         type=int,
                         default=1,
